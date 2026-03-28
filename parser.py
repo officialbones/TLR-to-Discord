@@ -135,7 +135,6 @@ CITY_TO_COUNTY = {
 }
 
 # Words that should NOT trigger as part of incident keywords.
-# These appear in unit names, talkgroup names, and dispatch boilerplate.
 NON_INCIDENT_FIRE_CONTEXTS = re.compile(
     r"\b(?:engine|ladder|truck|rescue|squad|medic|battalion|chief|captain|"
     r"tanker|tanger|tender|quint|tower|station|apparatus|department|"
@@ -145,11 +144,7 @@ NON_INCIDENT_FIRE_CONTEXTS = re.compile(
 )
 
 # Keyword -> incident type mapping (order matters: first match wins)
-# "fire" is intentionally NOT here as a standalone — it false-matches on
-# unit names like "ENGINE 6" dispatched on "FIRE GROUND 3".
-# Specific fire types (structure fire, vehicle fire, etc.) are still matched.
 KEYWORD_INCIDENT_MAP = [
-    # Accidents / crashes — must be before generic keywords
     ("accident with injury", "Vehicle Crash - Injury"),
     ("accident with fatality", "Vehicle Crash - Fatal"),
     ("accident", "Vehicle Crash"),
@@ -164,7 +159,6 @@ KEYWORD_INCIDENT_MAP = [
     ("head-on", "Vehicle Crash - Head On"),
     ("mva", "Vehicle Crash"),
     ("mvc", "Vehicle Crash"),
-    # Fire — specific types only (no bare "fire")
     ("structure fire", "Structure Fire"),
     ("house fire", "Structure Fire"),
     ("building fire", "Structure Fire"),
@@ -178,12 +172,10 @@ KEYWORD_INCIDENT_MAP = [
     ("brush fire", "Grass/Brush Fire"),
     ("wildland fire", "Wildland Fire"),
     ("dumpster fire", "Dumpster Fire"),
-    # Rescue / entrapment
     ("entrapment", "Entrapment/Rescue"),
     ("pin-in", "Entrapment/Rescue"),
     ("pinned in", "Entrapment/Rescue"),
     ("extrication", "Entrapment/Rescue"),
-    # Weapons / violence
     ("shots fired", "Shots Fired"),
     ("shooting", "Shooting"),
     ("gunshot", "Shooting"),
@@ -193,7 +185,6 @@ KEYWORD_INCIDENT_MAP = [
     ("stabbing", "Stabbing"),
     ("assault", "Assault"),
     ("battery", "Battery"),
-    # Robbery / burglary / theft
     ("armed robbery", "Armed Robbery"),
     ("bank robbery", "Bank Robbery"),
     ("robbery", "Robbery"),
@@ -202,30 +193,24 @@ KEYWORD_INCIDENT_MAP = [
     ("break-in", "Burglary"),
     ("theft", "Theft"),
     ("stolen", "Theft"),
-    # Pursuit
     ("pursuit", "Vehicle Pursuit"),
     ("foot chase", "Foot Pursuit"),
     ("foot pursuit", "Foot Pursuit"),
-    # Hazmat
     ("hazmat", "HAZMAT Incident"),
     ("haz-mat", "HAZMAT Incident"),
     ("hazardous material", "HAZMAT Incident"),
     ("gas leak", "Gas Leak"),
     ("carbon monoxide", "Carbon Monoxide"),
-    # Explosive / bomb
     ("bomb threat", "Bomb Threat"),
     ("suspicious package", "Suspicious Package"),
     ("explosion", "Explosion"),
-    # Missing / abduction
     ("missing person", "Missing Person"),
     ("missing child", "Missing Child"),
     ("amber alert", "AMBER Alert"),
     ("silver alert", "Silver Alert"),
-    # Water
     ("drowning", "Drowning"),
     ("water rescue", "Water Rescue"),
     ("swift water", "Swift Water Rescue"),
-    # EMS / Medical — specific types first
     ("cardiac arrest", "Cardiac Arrest"),
     ("cardiac", "Cardiac Emergency"),
     ("chest pain", "Chest Pain"),
@@ -252,7 +237,6 @@ KEYWORD_INCIDENT_MAP = [
     ("bls transfer", "BLS Transfer"),
     ("als transfer", "ALS Transfer"),
     ("transfer to", "Patient Transfer"),
-    # Law enforcement general
     ("domestic", "Domestic Disturbance"),
     ("disturbance", "Disturbance"),
     ("trespassing", "Trespassing"),
@@ -263,6 +247,28 @@ KEYWORD_INCIDENT_MAP = [
     ("well-being check", "Welfare Check"),
     ("alarm", "Alarm"),
 ]
+
+# --- Address abbreviation tables ---
+DIRECTION_ABBREV = {
+    "north": "N", "south": "S", "east": "E", "west": "W",
+    "northeast": "NE", "northwest": "NW", "southeast": "SE", "southwest": "SW",
+    "n": "N", "s": "S", "e": "E", "w": "W",
+    "n.": "N", "s.": "S", "e.": "E", "w.": "W",
+    "ne": "NE", "nw": "NW", "se": "SE", "sw": "SW",
+}
+
+SUFFIX_ABBREV = {
+    "street": "ST", "avenue": "AVE", "road": "RD", "drive": "DR",
+    "boulevard": "BLVD", "lane": "LN", "court": "CT", "place": "PL",
+    "pike": "PIKE", "highway": "HWY", "trail": "TRL", "circle": "CIR",
+    "parkway": "PKWY", "terrace": "TER", "path": "PATH", "run": "RUN",
+    "ridge": "RDG", "crossing": "XING", "loop": "LOOP", "row": "ROW",
+    "square": "SQ", "way": "WAY",
+    # Already abbreviated forms
+    "st": "ST", "ave": "AVE", "rd": "RD", "dr": "DR", "blvd": "BLVD",
+    "ln": "LN", "ct": "CT", "pl": "PL", "hwy": "HWY", "trl": "TRL",
+    "cir": "CIR", "pkwy": "PKWY", "ter": "TER", "xing": "XING", "sq": "SQ",
+}
 
 # Street suffixes for address matching
 STREET_SUFFIXES = (
@@ -285,8 +291,195 @@ INTERSECTION_BLACKLIST = {
     "city", "status", "signal", "copy", "check", "alert", "warning",
     "speed", "location", "facility", "patient", "hospital", "center",
     "regional", "memorial", "in", "on", "at", "to", "the", "and", "for",
-    "with", "from", "by", "cross", "of",
+    "with", "from", "by", "cross", "of", "giving", "said", "hours",
+    "duncan", "return", "head", "sending",
 }
+
+# Unit designation patterns (for extracting responding units)
+UNIT_PATTERN = re.compile(
+    r"\b(ENGINE|ENG|LADDER|TRUCK|RESCUE|SQUAD|MEDIC|AMBULANCE|"
+    r"BATTALION|CHIEF|CAPTAIN|TANKER|TANGER|TENDER|QUINT|TOWER|"
+    r"EVAC|LIFE|CAR|UNIT|WAGON|BRUSH|HAZMAT|AIR|MED)\s*(\d{1,4})\b",
+    re.IGNORECASE,
+)
+
+# Landmark / location name patterns (places named before the address)
+LANDMARK_PATTERN = re.compile(
+    r"\b([A-Z][A-Z\s]{2,}?)\s*,\s*\d{1,5}\s",
+)
+
+
+def _abbreviate_address(address_str: str) -> str:
+    """Convert a full address to abbreviated uppercase format.
+    e.g., "North Nevado Road" -> "N NEVADO RD"
+    """
+    words = address_str.split()
+    result = []
+    for word in words:
+        w_lower = word.lower().rstrip(".,")
+        if w_lower in DIRECTION_ABBREV:
+            result.append(DIRECTION_ABBREV[w_lower])
+        elif w_lower in SUFFIX_ABBREV:
+            result.append(SUFFIX_ABBREV[w_lower])
+        else:
+            result.append(word.upper())
+    return " ".join(result)
+
+
+def _extract_landmark(transcript: str) -> str | None:
+    """
+    Try to find a landmark/location name in the transcript.
+    Dispatchers often say the location name before the address:
+    "MOUNT OLIVE CHURCH, 5000 NORTH NEVADO ROAD"
+    "DAILY APARTMENTS, 1204 EAST BUNCH BOULEVARD"
+    """
+    if not transcript:
+        return None
+
+    # Pattern: NAMED PLACE, <number> <street>
+    m = re.search(
+        r"([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){1,4})\s*,\s*\d{1,5}\s",
+        transcript,
+    )
+    if m:
+        landmark = m.group(1).strip()
+        # Filter out things that aren't landmarks
+        landmark_lower = landmark.lower()
+        skip_words = {
+            "engine", "ladder", "truck", "rescue", "squad", "medic",
+            "respond on", "cross of", "cross street",
+        }
+        if any(s in landmark_lower for s in skip_words):
+            return None
+        # Filter out if it's just a county name + "county"
+        if "county" in landmark_lower:
+            return None
+        return landmark.upper()
+
+    # Pattern: "RM ###" or "ROOM ###" (room number at a facility)
+    rm = re.search(r"\b(?:RM|ROOM)\s+(\d+)\b", transcript, re.IGNORECASE)
+    if rm:
+        return None  # Room numbers aren't landmarks
+
+    return None
+
+
+def _extract_units(transcript: str) -> list[str]:
+    """Extract responding unit designations from transcript."""
+    units = []
+    for m in UNIT_PATTERN.finditer(transcript):
+        unit_type = m.group(1).upper()
+        unit_num = m.group(2)
+        units.append(f"{unit_type} {unit_num}")
+    return units
+
+
+def _extract_respond_channel(transcript: str) -> str | None:
+    """Extract 'respond on X' channel info from transcript."""
+    m = re.search(
+        r"respond\s+on\s+([\w\s]+?)(?:\.|$)",
+        transcript,
+        re.IGNORECASE,
+    )
+    if m:
+        return m.group(1).strip()
+    return None
+
+
+def _build_summary(transcript: str, incident_type: str) -> str:
+    """
+    Build an intelligent summary from the transcript.
+    Extracts units, describes the incident, mentions the channel.
+    """
+    if not transcript:
+        return "(No transcription available)"
+
+    parts = []
+
+    # 1. Responding units
+    units = _extract_units(transcript)
+    if units:
+        parts.append(", ".join(units))
+
+    # 2. Incident description
+    # Map incident_type to a short, readable phrase
+    incident_phrases = {
+        "Vehicle Crash": "a vehicle crash",
+        "Vehicle Crash - Injury": "an injury crash",
+        "Vehicle Crash - Fatal": "a fatal crash",
+        "Vehicle Crash - Rollover": "a rollover crash",
+        "Vehicle Crash - Head On": "a head-on crash",
+        "Structure Fire": "a structure fire",
+        "Vehicle Fire": "a vehicle fire",
+        "Grass/Brush Fire": "a grass/brush fire",
+        "Wildland Fire": "a wildland fire",
+        "Dumpster Fire": "a dumpster fire",
+        "Fire": "a fire",
+        "Entrapment/Rescue": "an entrapment/rescue",
+        "Shooting": "a shooting",
+        "Shots Fired": "a shots fired call",
+        "Person with Gun": "a person with a gun",
+        "Person with Weapon": "a person with a weapon",
+        "Stabbing": "a stabbing",
+        "Assault": "an assault",
+        "Battery": "a battery",
+        "Armed Robbery": "an armed robbery",
+        "Bank Robbery": "a bank robbery",
+        "Robbery": "a robbery",
+        "Burglary": "a burglary",
+        "Theft": "a theft",
+        "Vehicle Pursuit": "a vehicle pursuit",
+        "Foot Pursuit": "a foot pursuit",
+        "HAZMAT Incident": "a HAZMAT incident",
+        "Gas Leak": "a gas leak",
+        "Carbon Monoxide": "a carbon monoxide call",
+        "Bomb Threat": "a bomb threat",
+        "Explosion": "an explosion",
+        "Missing Person": "a missing person",
+        "Missing Child": "a missing child",
+        "Drowning": "a drowning",
+        "Water Rescue": "a water rescue",
+        "Cardiac Arrest": "a cardiac arrest",
+        "Cardiac Emergency": "a cardiac emergency",
+        "Chest Pain": "a chest pain call",
+        "Overdose": "an overdose",
+        "Unresponsive Person": "an unresponsive person",
+        "Respiratory Emergency": "a respiratory emergency",
+        "Choking": "a choking call",
+        "Seizure": "a seizure",
+        "Stroke": "a stroke",
+        "Medical Emergency": "a medical emergency",
+        "EMS Call": "an EMS call",
+        "Lift Assist": "a lift assist",
+        "Fall/Injury": "a fall/injury",
+        "BLS Transfer": "a BLS transfer",
+        "ALS Transfer": "an ALS transfer",
+        "Patient Transfer": "a patient transfer",
+        "Domestic Disturbance": "a domestic disturbance",
+        "Disturbance": "a disturbance",
+        "Trespassing": "a trespassing call",
+        "Suspicious Person": "a suspicious person",
+        "Suspicious Vehicle": "a suspicious vehicle",
+        "Welfare Check": "a welfare check",
+        "Alarm": "an alarm",
+        "Tone Alert": "a tone alert",
+        "Keyword Alert": "a dispatch",
+        "Dispatch": "a dispatch",
+    }
+
+    phrase = incident_phrases.get(incident_type, "a dispatch")
+
+    if units:
+        parts.append(f"responding to {phrase}")
+    else:
+        parts.append(phrase.capitalize())
+
+    # 3. Channel / fire ground
+    channel = _extract_respond_channel(transcript)
+    if channel:
+        parts.append(f"on {channel}")
+
+    return " ".join(parts)
 
 
 def is_pager_test(transcript: str) -> bool:
@@ -304,88 +497,103 @@ def is_pager_test(transcript: str) -> bool:
 def extract_county(talkgroup_label: str, system_label: str, transcript: str) -> str:
     """
     Extract county from talkgroup label, system label, or transcript.
-    Returns "County Co" format or "UNK CNTY" as fallback.
+    Returns "COUNTY_NAME COUNTY" in all caps. Fallback: "UNK COUNTY".
     """
     tg = (talkgroup_label or "").lower()
     sys_lbl = (system_label or "").lower()
     tx = (transcript or "").lower()
 
-    # 1. Check system label for county names (most reliable — "Delaware County Government")
+    # 1. Check system label for county names (most reliable)
     for county in INDIANA_COUNTIES:
         county_lower = county.lower()
         if county_lower in sys_lbl:
-            return f"{county} Co"
+            return f"{county.upper()} COUNTY"
 
     # 2. Check talkgroup label for county names
     for county in INDIANA_COUNTIES:
         county_lower = county.lower()
         if county_lower in tg:
-            return f"{county} Co"
+            return f"{county.upper()} COUNTY"
 
     # 3. Check talkgroup/system labels for city names -> map to county
     for city, county in CITY_TO_COUNTY.items():
         if city in tg or city in sys_lbl:
-            return f"{county} Co"
+            return f"{county.upper()} COUNTY"
 
     # 4. Check transcript for county mentions (e.g., "DELAWARE COUNTY")
     for county in INDIANA_COUNTIES:
         county_lower = county.lower()
         if re.search(rf"\b{re.escape(county_lower)}\s+count", tx):
-            return f"{county} Co"
+            return f"{county.upper()} COUNTY"
 
     # 5. Check transcript for city mentions -> map to county
     for city, county in CITY_TO_COUNTY.items():
         if re.search(rf"\b{re.escape(city)}\b", tx):
-            return f"{county} Co"
+            return f"{county.upper()} COUNTY"
 
     # 6. Try to extract city name from talkgroup label as-is
-    # Many labels are like "City Name Fire" or "City Name PD"
     tg_clean = re.sub(r"\b(fire|pd|police|ems|dispatch|sheriff|so|fd|disp|rural)\b", "", tg).strip()
-    tg_clean = re.sub(r"\d+[-]?", "", tg_clean).strip()  # Remove numbers like "18-"
+    tg_clean = re.sub(r"\d+[-]?", "", tg_clean).strip()
     if tg_clean and len(tg_clean) > 2:
-        return tg_clean.title()
+        return tg_clean.upper()
 
-    return "UNK CNTY"
+    return "UNK COUNTY"
 
 
 def extract_address(transcript: str) -> str:
     """
-    Extract street address from transcript and convert to block format.
-    Returns "X00 Block of Street Name" or "No Address".
+    Extract street address from transcript and convert to abbreviated block format.
+    Returns "5000 BLK N NEVADO RD (LANDMARK)" or "NO ADDRESS".
+    All output is uppercase abbreviated.
     """
     if not transcript:
-        return "No Address"
+        return "NO ADDRESS"
 
     text = transcript
+    landmark = _extract_landmark(transcript)
 
     # Pattern 1: Number + optional direction + street name + suffix
-    # This is the most reliable pattern — requires a street suffix
     pattern1 = (
         rf"(\d{{1,5}})\s*[-]?\s*"
-        rf"(?:{DIRECTIONS}\s+)?"
+        rf"({DIRECTIONS})?\s*"
         rf"((?:[A-Za-z]+\s?){{1,4}})"
-        rf"\s*{STREET_SUFFIXES}"
+        rf"\s*({STREET_SUFFIXES})"
     )
     match = re.search(pattern1, text, re.IGNORECASE)
     if match:
         num = int(match.group(1))
-        street_part = match.group(0)
-        street_name = re.sub(r"^\d+\s*[-]?\s*", "", street_part).strip()
+        direction = (match.group(2) or "").strip()
+        street_name = match.group(3).strip()
+        suffix = match.group(4).strip()
         block_num = (num // 100) * 100
-        return f"{block_num} Block of {street_name.title()}"
 
-    # Pattern 2: "STATE ROAD ##" or "STATE ROUTE ##" or "SR ##" or "US ##" or "CR ##"
+        # Build abbreviated address
+        parts = [str(block_num), "BLK"]
+        if direction:
+            parts.append(DIRECTION_ABBREV.get(direction.lower().rstrip("."), direction.upper()))
+        parts.append(street_name.upper())
+        parts.append(SUFFIX_ABBREV.get(suffix.lower(), suffix.upper()))
+
+        addr = " ".join(parts)
+        if landmark:
+            addr += f" ({landmark})"
+        return addr
+
+    # Pattern 2: "STATE ROAD ##" or "SR ##" or "US ##" or "CR ##"
     state_road = re.search(
         rf"(?:state\s+road|state\s+route|sr|us|cr|county\s+road)\s+(\d+)",
         text,
         re.IGNORECASE,
     )
     if state_road:
-        road_name = state_road.group(0).strip()
-        return f"Area of {road_name.title()}"
+        road_name = state_road.group(0).strip().upper()
+        road_name = road_name.replace("STATE ROAD", "SR").replace("STATE ROUTE", "SR").replace("COUNTY ROAD", "CR")
+        addr = road_name
+        if landmark:
+            addr += f" ({landmark})"
+        return addr
 
     # Pattern 3: Number + direction + name (without explicit suffix)
-    # Only match if the street name is capitalized and looks real
     pattern2 = (
         rf"(\d{{1,5}})\s*[-]?\s*"
         rf"({DIRECTIONS})\s+"
@@ -396,13 +604,15 @@ def extract_address(transcript: str) -> str:
         num = int(match.group(1))
         direction = match.group(2).strip()
         street = match.group(3).strip()
-        # Make sure the street name isn't a dispatch keyword
         if street.lower() not in INTERSECTION_BLACKLIST:
             block_num = (num // 100) * 100
-            return f"{block_num} Block of {direction.title()} {street.title()}"
+            dir_abbr = DIRECTION_ABBREV.get(direction.lower().rstrip("."), direction.upper())
+            addr = f"{block_num} BLK {dir_abbr} {street.upper()}"
+            if landmark:
+                addr += f" ({landmark})"
+            return addr
 
-    # Pattern 4: Intersection "X and Y" — only if both look like real street names
-    # Require at least one side to have a street suffix or direction
+    # Pattern 4: Intersection — only if both look like real street names
     intersection = re.search(
         rf"(?:{DIRECTIONS}\s+)?([A-Z][a-zA-Z]{{2,}}(?:\s+{STREET_SUFFIXES})?)"
         rf"\s+(?:and|&)\s+"
@@ -412,47 +622,31 @@ def extract_address(transcript: str) -> str:
     if intersection:
         street1 = intersection.group(1).strip()
         street2 = intersection.group(2).strip()
-        # Both street names must NOT be in the blacklist
         if (
             street1.lower() not in INTERSECTION_BLACKLIST
             and street2.lower() not in INTERSECTION_BLACKLIST
             and len(street1) > 2
             and len(street2) > 2
         ):
-            full_match = intersection.group(0).strip()
-            return f"Area of {full_match.title()}"
+            full_match = _abbreviate_address(intersection.group(0).strip())
+            return full_match
 
-    return "No Address"
+    return "NO ADDRESS"
 
 
 def _is_standalone_fire_keyword(transcript: str) -> bool:
-    """
-    Check if "fire" in the transcript refers to an actual fire incident,
-    not just a unit name or talkgroup reference.
-
-    Returns True if "fire" appears to describe an actual fire.
-    """
+    """Check if 'fire' refers to an actual fire, not a unit name."""
     text_lower = transcript.lower()
-
-    # If "fire" doesn't appear at all, no match
     if "fire" not in text_lower:
         return False
-
-    # Strip out known non-incident fire references (unit names, talkgroups, etc.)
     cleaned = NON_INCIDENT_FIRE_CONTEXTS.sub("", text_lower)
-    # Also strip "respond on ... fire ground" patterns
     cleaned = re.sub(r"respond\s+on\s+.*?fire\s+ground\s+\d+", "", cleaned)
-    # Strip "X fire" where X is a proper name (department name)
     cleaned = re.sub(r"\b[a-z]+\s+fire\b", "", cleaned)
-
-    # Check if "fire" still remains in the cleaned text
     return bool(re.search(r"\bfire\b", cleaned))
 
 
 def classify_incident(alert: dict, transcript: str) -> str:
-    """
-    Classify the incident type from 10-codes, keywords, and alert metadata.
-    """
+    """Classify the incident type from 10-codes, keywords, and alert metadata."""
     if not transcript:
         if alert.get("toneDetected"):
             return "Tone Alert"
@@ -460,29 +654,28 @@ def classify_incident(alert: dict, transcript: str) -> str:
 
     text_lower = transcript.lower()
 
-    # 1. Check for 10-codes that map to incident types
+    # 1. 10-codes
     ten_codes = find_ten_codes_in_text(transcript)
     for _raw, code, _desc in ten_codes:
         if code in TEN_CODE_INCIDENT_MAP:
             return TEN_CODE_INCIDENT_MAP[code]
 
-    # 2. Check for signal codes that map to incident types
+    # 2. Signal codes
     signals = find_signal_codes_in_text(transcript)
     for _raw, code, _desc in signals:
         if code in SIGNAL_INCIDENT_MAP:
             return SIGNAL_INCIDENT_MAP[code]
 
-    # 3. Keyword matching (first match wins, list is priority-ordered)
+    # 3. Keyword matching
     for keyword, incident_type in KEYWORD_INCIDENT_MAP:
         if keyword in text_lower:
             return incident_type
 
-    # 4. Check for standalone "fire" only after all specific keywords failed
-    # This avoids matching "fire" in unit names like "DUNCAN FIRE AND ENGINE"
+    # 4. Standalone "fire" with context check
     if _is_standalone_fire_keyword(transcript):
         return "Fire"
 
-    # 5. Check alert metadata as last resort
+    # 5. Alert metadata fallback
     alert_type = (alert.get("alertType") or "").lower()
     if "tone" in alert_type or alert.get("toneDetected"):
         return "Tone Alert"
@@ -498,7 +691,6 @@ def parse_alert(alert: dict, transcript: str) -> dict:
     Returns dict with county, address, incident_type, summary, formatted.
     Returns None if the alert should be suppressed (pager test, etc.).
     """
-    # Filter out pager tests
     if is_pager_test(transcript):
         return None
 
@@ -508,7 +700,7 @@ def parse_alert(alert: dict, transcript: str) -> dict:
     county = extract_county(tg_label, sys_label, transcript)
     address = extract_address(transcript)
     incident_type = classify_incident(alert, transcript)
-    summary = transcript if transcript else "(No transcription available)"
+    summary = _build_summary(transcript, incident_type)
 
     formatted = f"{county} | {address} | {incident_type} | {summary}"
 
