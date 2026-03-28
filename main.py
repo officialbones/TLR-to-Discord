@@ -42,8 +42,8 @@ def process_alert(alert: dict) -> bool:
     """
     Full pipeline for one alert:
     1. Get or create transcript
-    2. Parse into structured format
-    3. Send Discord embed
+    2. Parse into structured format (may return None for suppressed alerts)
+    3. Send Discord plain text + embed
     4. Update DB with alert summary
     """
     alert_id = alert["alertId"]
@@ -57,13 +57,19 @@ def process_alert(alert: dict) -> bool:
 
     # Step 2: Parse transcript
     parsed = parse_alert(alert, transcript)
+    if parsed is None:
+        logger.info(f"Alert #{alert_id} suppressed (pager test / disregard)")
+        return False
+
     logger.info(
         f"Alert #{alert_id}: {parsed['county']} | {parsed['address']} | "
         f"{parsed['incident_type']}"
     )
 
-    # Step 3: Send to Discord
+    # Step 3: Send to Discord — plain text line + rich embed
     payload = build_embed(alert, parsed)
+    # Add the plain text summary line above the embed
+    payload["content"] = parsed["formatted"]
     discord_ok = send_to_discord(payload)
     if not discord_ok:
         logger.warning(f"Discord notification failed for alert #{alert_id}")
@@ -98,6 +104,10 @@ def main():
 
     logger.info(f"Watching for alerts with alertId > {last_alert_id}")
 
+    # Track processed callIds to deduplicate within a session
+    # (multiple alerts can fire for the same call — tone + keyword)
+    processed_call_ids = set()
+
     while True:
         try:
             alerts = db.fetch_new_alerts(last_alert_id)
@@ -106,8 +116,22 @@ def main():
                 logger.info(f"Found {len(alerts)} new alert(s)")
 
             for alert in alerts:
+                call_id = alert["callId"]
+
+                # Deduplicate: skip if we already sent a Discord message for this callId
+                if call_id in processed_call_ids:
+                    logger.info(
+                        f"Skipping alert #{alert['alertId']} — "
+                        f"callId={call_id} already processed"
+                    )
+                    last_alert_id = alert["alertId"]
+                    save_state(last_alert_id)
+                    continue
+
                 try:
-                    process_alert(alert)
+                    sent = process_alert(alert)
+                    if sent:
+                        processed_call_ids.add(call_id)
                 except Exception as e:
                     logger.error(
                         f"Failed to process alert #{alert['alertId']}: {e}",
@@ -117,6 +141,13 @@ def main():
                 # Always advance past this alert
                 last_alert_id = alert["alertId"]
                 save_state(last_alert_id)
+
+            # Prevent the dedup set from growing forever —
+            # keep only the last 500 call IDs
+            if len(processed_call_ids) > 500:
+                excess = len(processed_call_ids) - 500
+                for _ in range(excess):
+                    processed_call_ids.pop()
 
         except KeyboardInterrupt:
             logger.info("Shutting down...")
