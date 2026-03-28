@@ -32,6 +32,11 @@ DISCORD_WEBHOOK_URL = _require("DISCORD_WEBHOOK_URL")
 # Transcription API — required
 TRANSCRIPTION_URL = _require("TRANSCRIPTION_URL")
 
+# LLM API for AI-powered summarization — required
+# Should be an OpenAI-compatible /v1/chat/completions endpoint
+LLM_URL = _require("LLM_URL")
+LLM_MODEL = os.getenv("LLM_MODEL", "llama3.2:3b")
+
 # Polling — optional with safe defaults
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "60"))
 STATE_FILE = os.getenv("STATE_FILE", "./state.json")

@@ -2,6 +2,8 @@
 
 import re
 import logging
+import requests
+from config import LLM_URL, LLM_MODEL
 from ten_codes import (
     find_ten_codes_in_text,
     find_signal_codes_in_text,
@@ -414,103 +416,87 @@ def _extract_respond_channel(transcript: str) -> str | None:
     return None
 
 
-def _build_summary(transcript: str, incident_type: str) -> str:
+def _build_summary(transcript: str, incident_type: str, alert: dict) -> str:
     """
-    Build an intelligent summary from the transcript.
-    Extracts units, describes the incident, mentions the channel.
-    If there's nothing meaningful to add beyond restating the incident type,
-    returns the raw transcript instead of a generic phrase.
+    Use an AI LLM to generate a clean, human-readable summary
+    from the raw radio transcript.
+    Falls back to raw transcript on failure.
     """
     if not transcript:
         return ""
 
-    units = _extract_units(transcript)
-    channel = _extract_respond_channel(transcript)
+    tg_label = alert.get("talkgroupLabel", "") or ""
+    sys_label = alert.get("systemLabel", "") or ""
 
-    # If we have no units and no channel, there's nothing intelligent to build.
-    # Just return the raw transcript.
-    if not units and not channel:
-        return transcript
+    system_prompt = (
+        "You are a dispatch summary writer for an Indiana emergency services alert system. "
+        "You receive raw radio transcriptions from police, fire, and EMS dispatchers. "
+        "Your job is to write a single clean, concise summary sentence.\n\n"
+        "Rules:\n"
+        "- Write ONE sentence, no more than 2 short sentences max\n"
+        "- Include responding units if mentioned (ENGINE 92, MEDIC 5, etc.)\n"
+        "- Include what they are responding to (the incident)\n"
+        "- Include any suspect/vehicle/person descriptions if relevant\n"
+        "- Use plain English, not radio jargon\n"
+        "- Indiana 10-codes: 10-50=Accident, 10-52=Ambulance Needed, 10-70=Fire Alarm, "
+        "10-16=Domestic, 10-32=Gun, 10-79=Notify Coroner, 10-89=Bomb Threat, etc.\n"
+        "- Numbers like '104' in transcripts likely mean '10-4' (acknowledgment)\n"
+        "- Do NOT include addresses (those are handled separately)\n"
+        "- Do NOT start with 'Summary:' or any label\n"
+        "- Do NOT include radio channels, talkgroups, or fire grounds "
+        "(e.g., 'Rural Fire Ground 1', 'Muncie Fire Ground 3', 'Sheriff Dispatch'). "
+        "These are radio channels, not locations or relevant details.\n"
+        "- Do NOT include 'respond on' instructions — those are radio instructions, not incident info\n"
+        "- If the transcript is just routine radio chatter with no real incident, "
+        "write a brief description of what's happening\n"
+    )
 
-    # Map incident_type to a short, readable phrase
-    incident_phrases = {
-        "Vehicle Crash": "a vehicle crash",
-        "Vehicle Crash - Injury": "an injury crash",
-        "Vehicle Crash - Fatal": "a fatal crash",
-        "Vehicle Crash - Rollover": "a rollover crash",
-        "Vehicle Crash - Head On": "a head-on crash",
-        "Structure Fire": "a structure fire",
-        "Vehicle Fire": "a vehicle fire",
-        "Grass/Brush Fire": "a grass/brush fire",
-        "Wildland Fire": "a wildland fire",
-        "Dumpster Fire": "a dumpster fire",
-        "Fire": "a fire",
-        "Entrapment/Rescue": "an entrapment/rescue",
-        "Shooting": "a shooting",
-        "Shots Fired": "a shots fired call",
-        "Person with Gun": "a person with a gun",
-        "Person with Weapon": "a person with a weapon",
-        "Stabbing": "a stabbing",
-        "Assault": "an assault",
-        "Battery": "a battery",
-        "Armed Robbery": "an armed robbery",
-        "Bank Robbery": "a bank robbery",
-        "Robbery": "a robbery",
-        "Burglary": "a burglary",
-        "Theft": "a theft",
-        "Vehicle Pursuit": "a vehicle pursuit",
-        "Foot Pursuit": "a foot pursuit",
-        "HAZMAT Incident": "a HAZMAT incident",
-        "Gas Leak": "a gas leak",
-        "Carbon Monoxide": "a carbon monoxide call",
-        "Bomb Threat": "a bomb threat",
-        "Explosion": "an explosion",
-        "Missing Person": "a missing person",
-        "Missing Child": "a missing child",
-        "Drowning": "a drowning",
-        "Water Rescue": "a water rescue",
-        "Cardiac Arrest": "a cardiac arrest",
-        "Cardiac Emergency": "a cardiac emergency",
-        "Chest Pain": "a chest pain call",
-        "Overdose": "an overdose",
-        "Unconscious Person": "an unconscious person",
-        "Unresponsive Person": "an unresponsive person",
-        "Respiratory Emergency": "a respiratory emergency",
-        "Choking": "a choking call",
-        "Seizure": "a seizure",
-        "Stroke": "a stroke",
-        "Medical Emergency": "a medical emergency",
-        "EMS Call": "an EMS call",
-        "Lift Assist": "a lift assist",
-        "Fall/Injury": "a fall/injury",
-        "BLS Transfer": "a BLS transfer",
-        "ALS Transfer": "an ALS transfer",
-        "Patient Transfer": "a patient transfer",
-        "Domestic Disturbance": "a domestic disturbance",
-        "Disturbance": "a disturbance",
-        "Trespassing": "a trespassing call",
-        "Suspicious Person": "a suspicious person",
-        "Suspicious Vehicle": "a suspicious vehicle",
-        "Welfare Check": "a welfare check",
-        "Alarm": "an alarm",
-        "Tone Alert": "a tone alert",
-        "Keyword Alert": "a dispatch",
-        "Dispatch": "a dispatch",
-    }
+    user_prompt = (
+        f"Incident Type: {incident_type}\n"
+        f"Talkgroup: {tg_label}\n"
+        f"System: {sys_label}\n"
+        f"Raw Transcript: {transcript}\n\n"
+        f"Write a clean summary:"
+    )
 
-    phrase = incident_phrases.get(incident_type, "a dispatch")
-    parts = []
+    try:
+        response = requests.post(
+            LLM_URL,
+            json={
+                "model": LLM_MODEL,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "max_tokens": 150,
+                "temperature": 0.3,
+            },
+            timeout=30,
+        )
 
-    if units:
-        parts.append(", ".join(units))
-        parts.append(f"responding to {phrase}")
-    else:
-        parts.append(phrase[0].upper() + phrase[1:])
+        if response.status_code == 200:
+            result = response.json()
+            summary = (
+                result.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                .strip()
+            )
+            if summary:
+                logger.info(f"AI summary generated: {summary[:80]}...")
+                return summary
 
-    if channel:
-        parts.append(f"on {channel}")
+        logger.warning(
+            f"LLM summarization failed: {response.status_code} {response.text[:200]}"
+        )
+    except requests.exceptions.Timeout:
+        logger.warning("LLM summarization timed out")
+    except Exception as e:
+        logger.error(f"LLM summarization error: {e}")
 
-    return " ".join(parts)
+    # Fallback: return the raw transcript
+    logger.info("Falling back to raw transcript for summary")
+    return transcript
 
 
 def is_pager_test(transcript: str) -> bool:
@@ -780,7 +766,7 @@ def parse_alert(alert: dict, transcript: str) -> dict:
     county = extract_county(tg_label, sys_label, transcript)
     address = extract_address(transcript)
     incident_type = classify_incident(alert, transcript)
-    summary = _build_summary(transcript, incident_type)
+    summary = _build_summary(transcript, incident_type, alert)
 
     formatted = f"{county} | {address} | {incident_type} | {summary}"
 
