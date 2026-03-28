@@ -418,18 +418,20 @@ def _build_summary(transcript: str, incident_type: str) -> str:
     """
     Build an intelligent summary from the transcript.
     Extracts units, describes the incident, mentions the channel.
+    If there's nothing meaningful to add beyond restating the incident type,
+    returns the raw transcript instead of a generic phrase.
     """
     if not transcript:
-        return "(No transcription available)"
+        return ""
 
-    parts = []
-
-    # 1. Responding units
     units = _extract_units(transcript)
-    if units:
-        parts.append(", ".join(units))
+    channel = _extract_respond_channel(transcript)
 
-    # 2. Incident description
+    # If we have no units and no channel, there's nothing intelligent to build.
+    # Just return the raw transcript.
+    if not units and not channel:
+        return transcript
+
     # Map incident_type to a short, readable phrase
     incident_phrases = {
         "Vehicle Crash": "a vehicle crash",
@@ -497,14 +499,14 @@ def _build_summary(transcript: str, incident_type: str) -> str:
     }
 
     phrase = incident_phrases.get(incident_type, "a dispatch")
+    parts = []
 
     if units:
+        parts.append(", ".join(units))
         parts.append(f"responding to {phrase}")
     else:
-        parts.append(phrase.capitalize())
+        parts.append(phrase[0].upper() + phrase[1:])
 
-    # 3. Channel / fire ground
-    channel = _extract_respond_channel(transcript)
     if channel:
         parts.append(f"on {channel}")
 
