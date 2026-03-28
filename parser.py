@@ -216,6 +216,7 @@ KEYWORD_INCIDENT_MAP = [
     ("chest pain", "Chest Pain"),
     ("overdose", "Overdose"),
     ("narcan", "Overdose"),
+    ("unconscious", "Unconscious Person"),
     ("unresponsive", "Unresponsive Person"),
     ("not breathing", "Respiratory Emergency"),
     ("difficulty breathing", "Respiratory Emergency"),
@@ -270,13 +271,16 @@ SUFFIX_ABBREV = {
     "cir": "CIR", "pkwy": "PKWY", "ter": "TER", "xing": "XING", "sq": "SQ",
 }
 
-# Street suffixes for address matching
+# Street suffixes for address matching — \b ensures we don't match inside
+# words like "DOMESTIC" splitting into "DOME" + "ST"
 STREET_SUFFIXES = (
-    r"(?:street|st|avenue|ave|road|rd|drive|dr|boulevard|blvd|"
+    r"(?:street|avenue|ave|road|rd|drive|dr|boulevard|blvd|"
     r"lane|ln|court|ct|way|place|pl|pike|highway|hwy|trail|trl|"
-    r"circle|cir|parkway|pkwy|terrace|ter|path|run|ridge|"
+    r"circle|cir|parkway|pkwy|terrace|ter|path|ridge|"
     r"crossing|xing|loop|row|square|sq)"
 )
+# "st" is only matched when it's a standalone word (not inside "domestic", "first", etc.)
+STREET_SUFFIX_ST = r"(?:\bst\b)"
 
 # Directional prefixes
 DIRECTIONS = r"(?:north|south|east|west|n\.?|s\.?|e\.?|w\.?|northeast|northwest|southeast|southwest|ne|nw|se|sw)"
@@ -296,10 +300,16 @@ INTERSECTION_BLACKLIST = {
 }
 
 # Unit designation patterns (for extracting responding units)
+# Pattern with number: ENGINE 92, MEDIC 5, etc.
 UNIT_PATTERN = re.compile(
     r"\b(ENGINE|ENG|LADDER|TRUCK|RESCUE|SQUAD|MEDIC|AMBULANCE|"
     r"BATTALION|CHIEF|CAPTAIN|TANKER|TANGER|TENDER|QUINT|TOWER|"
     r"EVAC|LIFE|CAR|UNIT|WAGON|BRUSH|HAZMAT|AIR|MED)\s*(\d{1,4})\b",
+    re.IGNORECASE,
+)
+# Pattern for named units without numbers: WINCHESTER MEDIC, MUNCIE FIRE, etc.
+NAMED_UNIT_PATTERN = re.compile(
+    r"\b([A-Z][a-zA-Z]+)\s+(MEDIC|FIRE|EMS|RESCUE|AMBULANCE|LIFE)\b",
     re.IGNORECASE,
 )
 
@@ -367,10 +377,28 @@ def _extract_landmark(transcript: str) -> str | None:
 def _extract_units(transcript: str) -> list[str]:
     """Extract responding unit designations from transcript."""
     units = []
+    seen = set()
+
+    # Numbered units: ENGINE 92, MEDIC 5, etc.
     for m in UNIT_PATTERN.finditer(transcript):
         unit_type = m.group(1).upper()
         unit_num = m.group(2)
-        units.append(f"{unit_type} {unit_num}")
+        unit_str = f"{unit_type} {unit_num}"
+        if unit_str not in seen:
+            units.append(unit_str)
+            seen.add(unit_str)
+
+    # Named units without numbers: WINCHESTER MEDIC, etc.
+    for m in NAMED_UNIT_PATTERN.finditer(transcript):
+        name = m.group(1).upper()
+        role = m.group(2).upper()
+        unit_str = f"{name} {role}"
+        # Skip if the "name" is a blacklisted word or already captured
+        if name.lower() in INTERSECTION_BLACKLIST or unit_str in seen:
+            continue
+        units.append(unit_str)
+        seen.add(unit_str)
+
     return units
 
 
@@ -443,6 +471,7 @@ def _build_summary(transcript: str, incident_type: str) -> str:
         "Cardiac Emergency": "a cardiac emergency",
         "Chest Pain": "a chest pain call",
         "Overdose": "an overdose",
+        "Unconscious Person": "an unconscious person",
         "Unresponsive Person": "an unresponsive person",
         "Respiratory Emergency": "a respiratory emergency",
         "Choking": "a choking call",
@@ -552,36 +581,43 @@ def extract_address(transcript: str) -> str:
     text = transcript
     landmark = _extract_landmark(transcript)
 
-    # Pattern 1: Number + optional direction + street name + suffix
+    # Combined suffix pattern: full words OR standalone "st" with word boundary
+    _suffix = rf"(?:{STREET_SUFFIXES}\b|{STREET_SUFFIX_ST})"
+
+    # Pattern 1: Number + optional direction + street name + suffix (word-bounded)
+    # e.g., "5000 NORTH NEVADO ROAD", "1204 EAST BUNCH BOULEVARD"
     pattern1 = (
-        rf"(\d{{1,5}})\s*[-]?\s*"
-        rf"({DIRECTIONS})?\s*"
-        rf"((?:[A-Za-z]+\s?){{1,4}})"
-        rf"\s*({STREET_SUFFIXES})"
+        rf"\b(\d{{1,5}})\s+"
+        rf"(?:({DIRECTIONS})\s+)?"
+        rf"([A-Za-z]{{3,}}(?:\s+[A-Za-z]{{3,}}){{0,3}})"
+        rf"\s+{_suffix}"
     )
     match = re.search(pattern1, text, re.IGNORECASE)
     if match:
         num = int(match.group(1))
         direction = (match.group(2) or "").strip()
         street_name = match.group(3).strip()
-        suffix = match.group(4).strip()
+        # Get the full match to extract the suffix
+        full = match.group(0)
+        suffix_match = re.search(rf"{_suffix}\s*$", full, re.IGNORECASE)
+        suffix = suffix_match.group(0).strip() if suffix_match else ""
         block_num = (num // 100) * 100
 
-        # Build abbreviated address
         parts = [str(block_num), "BLK"]
         if direction:
             parts.append(DIRECTION_ABBREV.get(direction.lower().rstrip("."), direction.upper()))
         parts.append(street_name.upper())
-        parts.append(SUFFIX_ABBREV.get(suffix.lower(), suffix.upper()))
+        if suffix:
+            parts.append(SUFFIX_ABBREV.get(suffix.lower(), suffix.upper()))
 
         addr = " ".join(parts)
         if landmark:
             addr += f" ({landmark})"
         return addr
 
-    # Pattern 2: "STATE ROAD ##" or "SR ##" or "US ##" or "CR ##"
+    # Pattern 2: "STATE ROAD ##" / "SR ##" / "US ##" / "CR ##"
     state_road = re.search(
-        rf"(?:state\s+road|state\s+route|sr|us|cr|county\s+road)\s+(\d+)",
+        rf"\b(?:state\s+road|state\s+route|sr|us|cr|county\s+road)\s+(\d+)\b",
         text,
         re.IGNORECASE,
     )
@@ -593,18 +629,21 @@ def extract_address(transcript: str) -> str:
             addr += f" ({landmark})"
         return addr
 
-    # Pattern 3: Number + direction + name (without explicit suffix)
-    pattern2 = (
-        rf"(\d{{1,5}})\s*[-]?\s*"
+    # Pattern 3: Number + direction + street name (no suffix required)
+    # e.g., "607 NORTH KETTERER", "5000 NORTH NEVADO"
+    pattern3 = (
+        rf"\b(\d{{1,5}})\s+"
         rf"({DIRECTIONS})\s+"
-        rf"([A-Z][a-zA-Z]{{2,}}(?:\s+[A-Z][a-zA-Z]{{2,}})*)"
+        rf"([A-Z][a-zA-Z]{{2,}}(?:\s+[A-Z][a-zA-Z]{{2,}}){{0,2}})"
     )
-    match = re.search(pattern2, text)
+    match = re.search(pattern3, text)
     if match:
         num = int(match.group(1))
         direction = match.group(2).strip()
         street = match.group(3).strip()
-        if street.lower() not in INTERSECTION_BLACKLIST:
+        # Filter out dispatch keywords and very short words
+        first_word = street.split()[0].lower() if street else ""
+        if first_word not in INTERSECTION_BLACKLIST and len(first_word) > 2:
             block_num = (num // 100) * 100
             dir_abbr = DIRECTION_ABBREV.get(direction.lower().rstrip("."), direction.upper())
             addr = f"{block_num} BLK {dir_abbr} {street.upper()}"
@@ -612,24 +651,63 @@ def extract_address(transcript: str) -> str:
                 addr += f" ({landmark})"
             return addr
 
-    # Pattern 4: Intersection — only if both look like real street names
+    # Pattern 4: Number + street name (no direction, no suffix)
+    # e.g., "1204 BUNCH" — less reliable, only use if number >= 100
+    pattern4 = rf"\b(\d{{3,5}})\s+([A-Z][a-zA-Z]{{3,}}(?:\s+[A-Z][a-zA-Z]{{3,}}){{0,2}})\b"
+    match = re.search(pattern4, text)
+    if match:
+        num = int(match.group(1))
+        street = match.group(2).strip()
+        first_word = street.split()[0].lower()
+        if first_word not in INTERSECTION_BLACKLIST and len(first_word) > 2:
+            block_num = (num // 100) * 100
+            addr = f"{block_num} BLK {street.upper()}"
+            if landmark:
+                addr += f" ({landmark})"
+            return addr
+
+    # Pattern 5: "ON <street>" pattern — common in radio ("ON LUDIE", "ON MEMORIAL")
+    on_street = re.search(
+        rf"\bon\s+({DIRECTIONS}\s+)?([A-Z][a-zA-Z]{{3,}}(?:\s+{_suffix})?)\b",
+        text,
+    )
+    if on_street:
+        direction = (on_street.group(1) or "").strip()
+        street = on_street.group(2).strip()
+        if street.lower() not in INTERSECTION_BLACKLIST and len(street) > 3:
+            parts = ["AREA OF"]
+            if direction:
+                parts.append(DIRECTION_ABBREV.get(direction.lower().rstrip("."), direction.upper()))
+            parts.append(_abbreviate_address(street))
+            return " ".join(parts)
+
+    # Pattern 6: Intersection — only if both look like real street names
     intersection = re.search(
-        rf"(?:{DIRECTIONS}\s+)?([A-Z][a-zA-Z]{{2,}}(?:\s+{STREET_SUFFIXES})?)"
+        rf"\b(?:({DIRECTIONS})\s+)?([A-Z][a-zA-Z]{{3,}})"
         rf"\s+(?:and|&)\s+"
-        rf"(?:{DIRECTIONS}\s+)?([A-Z][a-zA-Z]{{2,}}(?:\s+{STREET_SUFFIXES})?)",
+        rf"(?:({DIRECTIONS})\s+)?([A-Z][a-zA-Z]{{3,}})\b",
         text,
     )
     if intersection:
-        street1 = intersection.group(1).strip()
-        street2 = intersection.group(2).strip()
+        dir1 = (intersection.group(1) or "").strip()
+        street1 = intersection.group(2).strip()
+        dir2 = (intersection.group(3) or "").strip()
+        street2 = intersection.group(4).strip()
         if (
             street1.lower() not in INTERSECTION_BLACKLIST
             and street2.lower() not in INTERSECTION_BLACKLIST
             and len(street1) > 2
             and len(street2) > 2
         ):
-            full_match = _abbreviate_address(intersection.group(0).strip())
-            return full_match
+            parts = []
+            if dir1:
+                parts.append(DIRECTION_ABBREV.get(dir1.lower().rstrip("."), dir1.upper()))
+            parts.append(street1.upper())
+            parts.append("&")
+            if dir2:
+                parts.append(DIRECTION_ABBREV.get(dir2.lower().rstrip("."), dir2.upper()))
+            parts.append(street2.upper())
+            return " ".join(parts)
 
     return "NO ADDRESS"
 
